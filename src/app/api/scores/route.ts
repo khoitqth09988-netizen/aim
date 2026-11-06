@@ -12,8 +12,8 @@ async function load(): Promise<Score[]> {
   try { const value: unknown = JSON.parse(await readFile(file, 'utf8')); return Array.isArray(value) ? value.filter(isScore) : []; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
 }
-export async function GET() {
-  try { await pending; return Response.json(sortScores(await load()).slice(0, 20), { headers: { 'Cache-Control': 'no-store' } }); }
+export async function GET(request: Request) {
+  try { await pending; const scores = await load(); const recent = new URL(request.url).searchParams.get('sort') === 'recent'; return Response.json((recent ? scores.sort((a,b) => Date.parse(b.date)-Date.parse(a.date)) : sortScores(scores)).slice(0, 50), { headers: { 'Cache-Control': 'no-store' } }); }
   catch { return Response.json({ error: 'Không thể đọc bảng điểm.' }, { status: 500 }); }
 }
 export async function POST(request: Request) {
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
   const score: Score = { name: body.name.trim().slice(0, 16), kills: body.kills, shots: body.shots, hits: body.hits, time: body.time, difficulty: body.difficulty, date: body.date };
   if (!score.name) return Response.json({ error: 'Tên không hợp lệ.' }, { status: 400 });
   const save = pending.then(async () => {
-    const scores = sortScores([...(await load()), score]).slice(0, 100);
+    const scores = [...(await load()), score].slice(-100);
     await mkdir(directory, { recursive: true });
     const temp = `${file}.tmp`;
     await writeFile(temp, JSON.stringify(scores), 'utf8');

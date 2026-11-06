@@ -1,5 +1,5 @@
 // The static build replaces this version when its assets change.
-const CACHE_VERSION = '1b6b787a3e39';
+const CACHE_VERSION = '35ebce683256';
 const scope = self.registration.scope;
 const CACHE = `aimforge-offline-${encodeURIComponent(scope)}-${CACHE_VERSION}`;
 self.addEventListener('install', event => {

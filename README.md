@@ -1,6 +1,6 @@
 # AimForge — Đấu trường offline
 
-Game bắn súng góc nhìn thứ nhất với bot, chạy trong trình duyệt. Không có đăng nhập, cơ sở dữ liệu hay API cần thiết.
+Game bắn súng góc nhìn thứ nhất với bot, chạy trong trình duyệt. Không cần đăng nhập; chế độ offline không cần kết nối máy chủ.
 
 ## Chạy game
 
@@ -30,6 +30,40 @@ Khi sửa mã nguồn, chạy `npm install` và `npm run build:pages`, rồi com
 
 - Chọn độ khó Dễ / Thường / Khó trước mỗi lượt; độ khó ảnh hưởng tốc độ, sát thương và nhịp bắn của bot.
 - Nhấn **Q** để dùng một trong ba bộ cứu thương (+35 sinh lực). Bot có hoạt ảnh di chuyển, nháy khi trúng đạn và ngã khi bị hạ; súng, nạp đạn và đường đạn cũng có hiệu ứng.
-- Bảng thành tích lưu 20 lượt tốt nhất trên thiết bị. Dữ liệu localStorage chỉ nằm trong trình duyệt và có thể mất khi xóa dữ liệu trang.
+- Bảng thành tích và lịch sử lưu tối đa 50 lượt gần đây trên thiết bị. Dữ liệu localStorage chỉ nằm trong trình duyệt và có thể mất khi xóa dữ liệu trang.
 - Với Next.js tự chạy (`npm run dev` hoặc `npm start`), bảng thành tích có thêm tab **Máy chủ**. Sau khi kết thúc lượt, mở **Thành tích** và chủ động gửi điểm với tên tùy chọn. Không cần tài khoản. API `GET/POST /api/scores` lưu tối đa 100 kết quả vào `.data/scores.json` trên máy chủ; cần một tiến trình Node có quyền ghi thư mục này. Đây là lưu trữ file đơn giản cho tự host, không phù hợp serverless, nhiều tiến trình hay lưu trữ tạm. Điểm gửi từ client không có xác minh chống gian lận.
-- GitHub Pages là hosting tĩnh nên **không có API hay bảng điểm máy chủ**; bản Pages vẫn chơi offline và lưu thành tích trên thiết bị. Không cần cấu hình server để chơi.
+- GitHub Pages là hosting tĩnh nên **không tự chạy được API**. Bản Pages vẫn chơi offline; để chơi co-op hoặc xem điểm co-op cần kết nối tới máy chủ online riêng.
+
+
+## Co-op và máy chủ online
+
+Co-op là chế độ **hợp tác chống bot**, không phải PvP: tối đa 8 người trong cùng một phòng cùng nhìn thấy nhau và chiến đấu với cùng một nhóm bot. Mỗi người có sinh lực và thành tích riêng. Máy chủ điều khiển bot, đạn, sát thương và lưu kết quả; tên chỉ là biệt danh, không phải tài khoản. Bot không dừng khi nhấn Esc trong trận online.
+
+Chạy máy chủ riêng bằng Node.js 22+:
+
+```bash
+npm ci
+npm run server:online
+```
+
+Mặc định máy chủ lắng nghe trên cổng `4000` ở mọi interface. Đặt `PORT` để đổi cổng, `DATA_DIR` để đổi thư mục lưu file `online-history.json`, và `ALLOWED_ORIGINS` (danh sách origin phân cách bằng dấu phẩy) để giới hạn các trang có thể kết nối. Mặc định cho phép mọi origin, phù hợp thử nghiệm nhưng nên giới hạn khi triển khai. Dữ liệu lưu bằng file cục bộ, tối đa 500 lượt; hãy sử dụng ổ đĩa bền vững và sao lưu. Không chạy nhiều bản máy chủ cùng ghi một thư mục.
+
+1. Triển khai máy chủ Node trên dịch vụ hỗ trợ **WebSocket và lưu trữ bền vững**. Đặt reverse proxy HTTPS/TLS trước server và chuyển tiếp cả WebSocket upgrade đến `/multiplayer` lẫn các request HTTP tới `/api/online-scores` và `/health`.
+2. Trong game, chọn **PHÒNG ONLINE**, nhập địa chỉ công khai của máy chủ (`wss://...`), biệt danh và mã phòng, rồi kết nối. Người cùng phòng cần nhập cùng máy chủ và mã phòng.
+3. Sau khi kết nối, nhấn **BẮT ĐẦU HUẤN LUYỆN**. Khi bị hạ hoặc rời phòng, kết quả tự lưu trên máy chủ. Xem tab **CO-OP** trong **THÀNH TÍCH**, chọn xếp hạng hoặc lịch sử gần đây; bộ lọc theo tên chỉ tìm biệt danh và không xác thực danh tính.
+
+GitHub Pages chạy qua HTTPS nên trình duyệt chỉ cho kết nối đến máy chủ **WSS có chứng chỉ TLS hợp lệ**; GitHub Pages không thể tự chạy tiến trình Node/WebSocket. Khi phát triển trên HTTP tại máy của mình có thể dùng `ws://` tới máy chủ mà trình duyệt truy cập được. Đừng sử dụng địa chỉ `localhost` nếu người chơi khác đang dùng máy khác. Không nhập mật khẩu hay token vào trường địa chỉ này.
+
+Máy chủ này là bản co-op cơ bản, chưa có tài khoản, mã phòng bí mật, xác thực danh tính hay chống gian lận hoàn chỉnh; không dùng bảng điểm cho giải đấu hoặc dữ liệu nhạy cảm. Để trở lại chế độ offline, mở **PHÒNG ONLINE** trước trận và chọn **NGẮT KẾT NỐI / CHƠI OFFLINE**. Mất kết nối sẽ kết thúc lượt hiện tại.
+
+## Kiểm thử
+
+```bash
+npm test
+npm run typecheck
+npm run lint
+npm run build
+npm run build:pages
+```
+
+Kiểm thử server mở nhiều kết nối, kiểm tra đồng bộ phòng, bắn bot và lưu điểm. Kiểm thử thủ công với hai trình duyệt/máy khác nhau sau khi triển khai WSS để xác nhận cấu hình mạng, TLS và WebGL.
