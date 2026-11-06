@@ -1,29 +1,42 @@
-const CACHE = 'aimforge-offline-v1';
+// The static build replaces this version when its assets change.
+const CACHE_VERSION = 'v2';
+const scope = self.registration.scope;
+const CACHE = `aimforge-offline-${encodeURIComponent(scope)}-${CACHE_VERSION}`;
 self.addEventListener('install', event => {
-  event.waitUntil((async () => {
+  event.waitUntil ( (async () => {
     const cache = await caches.open(CACHE);
-    const response = await fetch('/');
+    const response = await fetch(scope);
     if (!response.ok) throw new Error('Unable to cache game');
-    await cache.put('/', response.clone());
-    await cache.addAll(['/fonts/Barlow-Regular.ttf', '/fonts/BarlowCondensed-Bold.ttf']);
+    await cache.put(scope, response.clone());
     const html = await response.text();
-    const assets = [...new Set([...html.matchAll(/(?:src|href)="([^" ]*\/_next\/static\/[^" ]+)"/g)].map(match => match[1].replace(/&amp;/g, '&')))];
-    await Promise.all(assets.map(url => cache.add(url).catch(() => {})));
+    const assets = [...new Set([...html.matchAll(/(?:src|href)="([^" ]+)"/g)]
+      .map(match => new URL(match[1].replace(/&amp;/g, '&'), scope).href)
+      .filter(url => url.startsWith(scope) && (url.includes('/_next/static/') || url.includes('/assets/'))))];
+    const isStatic = assets.some(url => url.includes('/assets/'));
+    const fonts = ['Barlow-Regular.ttf', 'BarlowCondensed-Bold.ttf'].map(name => new URL(`${isStatic ? 'public/' : ''}fonts/${name}`, scope).href);
+    await cache.addAll([...assets, ...fonts]);
     await self.skipWaiting();
   })());
 });
 self.addEventListener('activate', event => event.waitUntil((async () => {
-  await Promise.all((await caches.keys()).filter(key => key.startsWith('aimforge-offline-') && key !== CACHE).map(key => caches.delete(key)));
+  const prefix = `aimforge-offline-${encodeURIComponent(scope)}-`;
+  await Promise.all((await caches.keys()).filter(key => key.startsWith(prefix) && key !== CACHE).map(key => caches.delete(key)));
   await self.clients.claim();
 })()));
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
+  if (event.request.method !== 'GET' || !url.href.startsWith(scope)) return;
   if (event.request.mode === 'navigate') {
-    event.respondWith(fetch(event.request).then(response => { const copy = response.clone(); caches.open(CACHE).then(cache => cache.put('/', copy)); return response; }).catch(() => caches.match('/')));
+    event.respondWith(fetch(event.request).then(response => {
+      if (response.ok) { const copy = response.clone(); void caches.open(CACHE).then(cache => cache.put(scope, copy)); }
+      return response;
+    }).catch(() => caches.match(scope)));
     return;
   }
-  if (url.pathname.startsWith('/_next/static/') || url.pathname.startsWith('/fonts/')) {
-    event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request).then(response => { if (response.ok) { const copy = response.clone(); caches.open(CACHE).then(cache => cache.put(event.request, copy)); } return response; })));
+  if (url.pathname.includes('/_next/static/') || url.pathname.includes('/assets/') || url.pathname.includes('/fonts/')) {
+    event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
+      if (response.ok) { const copy = response.clone(); void caches.open(CACHE).then(cache => cache.put(event.request, copy)); }
+      return response;
+    })));
   }
 });

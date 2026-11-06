@@ -247,7 +247,7 @@ export default function Game() {
     };
   }, [flashHit, flashHurt]);
 
-  useEffect(() => { if ('serviceWorker' in navigator && process.env.NODE_ENV === 'production') void navigator.serviceWorker.register('/sw.js'); }, []);
+  useEffect(() => { if ('serviceWorker' in navigator && process.env.NODE_ENV === 'production') void navigator.serviceWorker.register(new URL('./sw.js', document.baseURI).href); }, []);
   const accuracy = stats.shots ? Math.round(stats.hits / stats.shots * 100) : 0;
   return <main className="app-shell">
     <div className="game-canvas" ref={mountRef} />
