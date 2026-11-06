@@ -5,7 +5,7 @@ export const SCORE_KEY = 'aimforge-scores-v1';
 export function readLocalScores(): Score[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(SCORE_KEY) || '[]');
-    return Array.isArray(value) ? value.filter(isScore).slice(0, 20) : [];
+    return Array.isArray(value) ? value.filter(isScore).slice(0, 50) : [];
   } catch { return []; }
 }
 export function isScore(value: unknown): value is Score {
