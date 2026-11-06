@@ -12,7 +12,7 @@ await build({
   target: ['es2020'],
   format: 'iife',
   jsx: 'automatic',
-  define: { 'process.env.NODE_ENV': '"production"' },
+  define: { 'process.env.NODE_ENV': '"production"', 'process.env.NEXT_PUBLIC_STATIC_PAGES': '"true"' },
 });
 const css = (await readFile('src/app/globals.css', 'utf8')).replaceAll("url('/fonts/", "url('../public/fonts/");
 await writeFile('assets/game.css', css);
