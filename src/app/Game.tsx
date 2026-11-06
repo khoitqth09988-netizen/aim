@@ -1,0 +1,287 @@
+'use client';
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import * as THREE from 'three';
+import { Activity, Crosshair, Expand, Gauge, Headphones, Keyboard, Maximize, MousePointer2, Shield, Target, Volume2, VolumeX, Zap } from 'lucide-react';
+
+type Status = 'ready' | 'playing' | 'paused' | 'gameover';
+type Stats = { health: number; ammo: number; kills: number; shots: number; hits: number; time: number; reloading: boolean };
+type Bot = { group: THREE.Group; body: THREE.Mesh; health: number; speed: number; phase: number; cooldown: number; dead: boolean };
+const initialStats: Stats = { health: 100, ammo: 30, kills: 0, shots: 0, hits: 0, time: 0, reloading: false };
+const ARENA = 27;
+const cover = [
+  { x: -9, z: -8, w: 5, d: 3, h: 2.5 }, { x: 9, z: -10, w: 5, d: 3, h: 2.5 },
+  { x: -15, z: -1, w: 3, d: 5, h: 2.8 }, { x: 15, z: 1, w: 3, d: 5, h: 2.8 },
+  { x: -7, z: 7, w: 4, d: 3, h: 1.5 }, { x: 8, z: 8, w: 4, d: 3, h: 1.5 },
+  { x: 0, z: -15, w: 5, d: 3, h: 2 }, { x: 0, z: 18, w: 5, d: 3, h: 1.5 },
+];
+
+function formatTime(seconds: number) { return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`; }
+
+export default function Game() {
+  const mountRef = useRef<HTMLDivElement>(null);
+  const gameRef = useRef<{ start: () => void; reload: () => void; fullscreen: () => void; sound: (on: boolean) => void } | null>(null);
+  const [status, setStatus] = useState<Status>('ready');
+  const [stats, setStats] = useState<Stats>(initialStats);
+  const [muted, setMuted] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [fullscreen, setFullscreen] = useState(false);
+  const [hit, setHit] = useState(false);
+  const [hurt, setHurt] = useState(false);
+  const [webglError, setWebglError] = useState(false);
+  const hitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hurtTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flashHit = useCallback(() => { setHit(true); if (hitTimer.current) clearTimeout(hitTimer.current); hitTimer.current = setTimeout(() => setHit(false), 130); }, []);
+  const flashHurt = useCallback(() => { setHurt(true); if (hurtTimer.current) clearTimeout(hurtTimer.current); hurtTimer.current = setTimeout(() => setHurt(false), 250); }, []);
+
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return;
+    let renderer: THREE.WebGLRenderer;
+    try { renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' }); } catch { queueMicrotask(() => setWebglError(true)); return; }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.setSize(mount.clientWidth, mount.clientHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    mount.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#1a292d');
+    scene.fog = new THREE.FogExp2('#243638', 0.024);
+    const camera = new THREE.PerspectiveCamera(70, mount.clientWidth / mount.clientHeight, 0.08, 110);
+    camera.position.set(0, 1.7, 22);
+    scene.add(camera);
+    scene.add(new THREE.HemisphereLight('#c4e7de', '#293338', 2.0));
+    const sun = new THREE.DirectionalLight('#e0e8d3', 2.8);
+    sun.position.set(-15, 35, 15); sun.castShadow = true;
+    sun.shadow.mapSize.set(1024, 1024); sun.shadow.camera.left = -35; sun.shadow.camera.right = 35; sun.shadow.camera.top = 35; sun.shadow.camera.bottom = -35;
+    sun.shadow.normalBias = 0.04; scene.add(sun);
+
+    const mat = (color: string, extra: THREE.MeshStandardMaterialParameters = {}) => new THREE.MeshStandardMaterial({ color, roughness: .82, ...extra });
+    const groundMat = mat('#404d49'); const wallMat = mat('#354441'); const darkMat = mat('#202d2c');
+    const trimMat = mat('#81958a'); const orange = mat('#e0ad63', { emissive: '#9c5a1c', emissiveIntensity: .35 });
+    const teal = mat('#8fffe1', { emissive: '#59f6c6', emissiveIntensity: 2 });
+    function box(w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number, parent: THREE.Object3D = scene) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material); mesh.position.set(x, y, z); mesh.castShadow = true; mesh.receiveShadow = true; parent.add(mesh); return mesh;
+    }
+    box(58, .4, 58, groundMat, 0, -.25, 0);
+    // Architectural seams and hazard lines give the training ground a sense of scale.
+    const lineMat = mat('#74847a');
+    for (let i = -24; i <= 24; i += 6) {
+      box(.025, .012, 54, lineMat, i, -.035, 0); box(54, .012, .025, lineMat, 0, -.034, i);
+    }
+    for (const x of [-28, 28]) {
+      box(1, 9, 58, wallMat, x, 4.5, 0); box(.12, .1, 55, teal, x * .98, 3.1, 0);
+      for (let z = -24; z <= 24; z += 8) box(1.5, 10, 1.4, darkMat, x, 5, z);
+    }
+    for (const z of [-28, 28]) {
+      box(58, 9, 1, wallMat, 0, 4.5, z); box(55, .1, .12, teal, 0, 3.1, z * .98);
+      for (let x = -24; x <= 24; x += 8) box(1.4, 10, 1.5, darkMat, x, 5, z);
+    }
+    // Far industrial towers visible over the perimeter.
+    for (let i = 0; i < 18; i++) {
+      const a = i / 18 * Math.PI * 2; const r = 38 + (i % 3) * 5; const height = 12 + (i % 5) * 4;
+      box(5 + i % 3, height, 5, i % 2 ? darkMat : wallMat, Math.sin(a) * r, height / 2 - 1, Math.cos(a) * r);
+    }
+    cover.forEach(c => {
+      box(c.w, c.h, c.d, darkMat, c.x, c.h / 2, c.z);
+      box(c.w + .12, .12, c.d + .12, trimMat, c.x, c.h + .02, c.z);
+      box(c.w * .55, .09, .04, orange, c.x, c.h * .65, c.z + c.d / 2 + .025);
+      for (const side of [-1, 1]) box(.1, c.h * .8, .08, trimMat, c.x + side * (c.w / 2 - .25), c.h / 2, c.z + c.d / 2 + .04);
+    });
+    // Central landing pad.
+    const ring = new THREE.Mesh(new THREE.RingGeometry(4.4, 4.47, 64), new THREE.MeshBasicMaterial({ color: '#97c0a9', side: THREE.DoubleSide })); ring.rotation.x = -Math.PI / 2; ring.position.y = -.02; scene.add(ring);
+    const innerRing = ring.clone(); innerRing.scale.setScalar(.75); scene.add(innerRing);
+    for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; const mark = box(.12, .018, .8, orange, Math.sin(a) * 4.1, -.01, Math.cos(a) * 4.1); mark.rotation.y = a; }
+
+    // First-person weapon, fixed to the camera.
+    const weapon = new THREE.Group(); weapon.position.set(.42, -.42, -.83); weapon.rotation.set(-.02, -.08, -.02); camera.add(weapon);
+    const gunDark = mat('#172321', { metalness: .55, roughness: .4 }); const gunLight = mat('#586c61', { metalness: .5, roughness: .45 });
+    box(.25, .23, .8, gunDark, 0, 0, 0, weapon); box(.18, .12, .58, gunLight, 0, .15, -.05, weapon);
+    box(.13, .13, .5, gunDark, 0, .03, -.58, weapon); box(.19, .16, .14, gunLight, 0, .03, -.84, weapon);
+    box(.11, .32, .15, gunDark, 0, -.24, .16, weapon).rotation.x = -.3;
+    box(.08, .08, .22, teal, .13, .02, .05, weapon); box(.06, .07, .13, orange, 0, .25, .1, weapon);
+    const muzzle = new THREE.PointLight('#ffcf85', 0, 8); muzzle.position.set(0, .04, -.95); weapon.add(muzzle);
+
+    const bots: Bot[] = [];
+    const robotDark = mat('#253533', { metalness: .5, roughness: .5 });
+    const robotArmor = mat('#879889', { metalness: .45, roughness: .45 });
+    const robotGlow = mat('#ff8a59', { emissive: '#ff5633', emissiveIntensity: 2 });
+    const botParts: THREE.Object3D[] = [];
+    function createBot(x: number, z: number, index: number) {
+      const group = new THREE.Group(); group.position.set(x, 0, z); scene.add(group);
+      const body = box(.8, .9, .42, robotArmor, 0, 1.37, 0, group);
+      box(.55, .5, .4, robotDark, 0, 2.08, 0, group);
+      box(.42, .11, .04, robotGlow, 0, 2.08, .22, group);
+      box(.22, .19, .05, robotGlow, 0, 1.42, .23, group);
+      for (const s of [-1, 1]) {
+        box(.22, .77, .25, robotDark, s * .55, 1.32, 0, group);
+        box(.3, .26, .34, robotArmor, s * .55, 1.7, 0, group);
+        box(.25, .85, .3, robotDark, s * .22, .48, 0, group);
+        box(.29, .18, .39, robotArmor, s * .22, .12, .04, group);
+      }
+      group.traverse(o => { if (o instanceof THREE.Mesh) { o.userData.botIndex = index; botParts.push(o); } });
+      bots.push({ group, body, health: 100, speed: 1.3 + Math.random() * .6, phase: Math.random() * 7, cooldown: 1 + Math.random() * 3, dead: false });
+    }
+    [[-11,-17], [0,-20], [11,-16], [-18,-12], [17,-4], [-13,2]].forEach(([x,z], i) => createBot(x,z,i));
+
+    let state: Status = 'ready'; let data = { ...initialStats }; let yaw = 0; let pitch = 0;
+    let mouseDown = false; let lastShot = 0; let reloadUntil = 0; let elapsed = 0; let lastUi = 0; let soundOn = true;
+    let audio: AudioContext | null = null; let recoil = 0; let frame = 0; let disposed = false;
+    const keys = new Set<string>(); const clock = new THREE.Clock(); const raycaster = new THREE.Raycaster();
+    const center = new THREE.Vector2(0,0); const direction = new THREE.Vector3();
+    function beep(freq: number, duration: number, type: OscillatorType = 'square', volume = .025) {
+      if (!soundOn) return;
+      try {
+        audio ??= new AudioContext(); if (audio.state === 'suspended') void audio.resume();
+        const osc = audio.createOscillator(); const gain = audio.createGain(); osc.type = type; osc.frequency.setValueAtTime(freq, audio.currentTime); osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq * .45), audio.currentTime + duration);
+        gain.gain.setValueAtTime(volume, audio.currentTime); gain.gain.exponentialRampToValueAtTime(.001, audio.currentTime + duration); osc.connect(gain); gain.connect(audio.destination); osc.start(); osc.stop(audio.currentTime + duration);
+      } catch { /* Audio is optional. */ }
+    }
+    function publish() { setStats({ ...data }); }
+    function collides(x: number, z: number, radius = .45) {
+      if (Math.abs(x) > ARENA || Math.abs(z) > ARENA) return true;
+      return cover.some(c => Math.abs(x - c.x) < c.w / 2 + radius && Math.abs(z - c.z) < c.d / 2 + radius);
+    }
+    function reset() {
+      data = { ...initialStats }; elapsed = 0; reloadUntil = 0; lastShot = 0; camera.position.set(0, 1.7, 22); yaw = 0; pitch = 0; camera.rotation.set(0, 0, 0);
+      bots.forEach((b, i) => { const p = [[-11,-17], [0,-20], [11,-16], [-18,-12], [17,-4], [-13,2]][i]; b.group.position.set(p[0],0,p[1]); b.health = 100; b.dead = false; b.group.visible = true; b.cooldown = 1 + Math.random() * 3; }); publish();
+    }
+    function requestLock() {
+      if (document.pointerLockElement !== renderer.domElement) {
+        const result = renderer.domElement.requestPointerLock();
+        if (result && typeof result.catch === 'function') result.catch(() => setNotice('Không thể khóa chuột. Hãy nhấn vào màn hình để thử lại.'));
+      }
+    }
+    function start() { if (state === 'gameover' || state === 'ready') reset(); requestLock(); }
+    function reload() { if (state !== 'playing' || data.reloading || data.ammo === 30) return; data.reloading = true; reloadUntil = elapsed + 1.4; beep(260, .16, 'triangle'); publish(); }
+    function shoot(now: number) {
+      if (state !== 'playing' || data.reloading || now - lastShot < .14) return;
+      if (data.ammo <= 0) { reload(); return; }
+      lastShot = now; data.ammo--; data.shots++; recoil = 1; muzzle.intensity = 7; beep(125, .09, 'sawtooth', .035);
+      raycaster.setFromCamera(center, camera);
+      const hits = raycaster.intersectObjects(botParts, false);
+      const target = hits.find(h => { const b = bots[h.object.userData.botIndex]; return b && !b.dead; });
+      if (target) {
+        // The solid covers block shots, even when a bot is behind them.
+        const obstacles = scene.children.filter(o => o instanceof THREE.Mesh && o !== ring && o !== innerRing);
+        const blocked = raycaster.intersectObjects(obstacles, false).some(h => h.distance < target.distance - .05);
+        if (!blocked) {
+          const bot = bots[target.object.userData.botIndex]; bot.health -= 34; data.hits++; flashHit(); beep(650, .07, 'sine', .025);
+          if (bot.health <= 0) { bot.dead = true; bot.group.visible = false; data.kills++; bot.cooldown = elapsed + 3; }
+        }
+      }
+      if (data.ammo === 0) reload(); publish();
+    }
+    function onLockChange() {
+      if (document.pointerLockElement === renderer.domElement) { state = 'playing'; setStatus('playing'); setNotice(''); clock.getDelta(); }
+      else if (state === 'playing') { state = 'paused'; setStatus('paused'); mouseDown = false; keys.clear(); }
+    }
+    function onMouseMove(e: MouseEvent) { if (state !== 'playing') return; yaw -= e.movementX * .0022; pitch = THREE.MathUtils.clamp(pitch - e.movementY * .0022, -1.25, 1.25); camera.rotation.order = 'YXZ'; camera.rotation.set(pitch, yaw, 0); }
+    function onDown(e: MouseEvent) { if (e.button === 0 && state === 'playing') { mouseDown = true; shoot(elapsed); } }
+    function onUp(e: MouseEvent) { if (e.button === 0) mouseDown = false; }
+    function onKeyDown(e: KeyboardEvent) { if (['KeyW','KeyA','KeyS','KeyD','Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault(); keys.add(e.code); if (e.code === 'KeyR' && !e.repeat) reload(); }
+    function onKeyUp(e: KeyboardEvent) { keys.delete(e.code); }
+    function onBlur() { keys.clear(); mouseDown = false; }
+    function onResize() { if (!mount) return; renderer.setSize(mount.clientWidth, mount.clientHeight); camera.aspect = mount.clientWidth / mount.clientHeight; camera.updateProjectionMatrix(); }
+    function onFullscreen() { setFullscreen(!!document.fullscreenElement); onResize(); }
+    function fullscreenToggle() { if (document.fullscreenElement) void document.exitFullscreen(); else void document.documentElement.requestFullscreen().catch(() => setNotice('Trình duyệt không hỗ trợ toàn màn hình.')); }
+    document.addEventListener('pointerlockchange', onLockChange); document.addEventListener('mousemove', onMouseMove); document.addEventListener('mousedown', onDown); document.addEventListener('mouseup', onUp);
+    window.addEventListener('keydown', onKeyDown); window.addEventListener('keyup', onKeyUp); window.addEventListener('blur', onBlur); window.addEventListener('resize', onResize); document.addEventListener('fullscreenchange', onFullscreen);
+    gameRef.current = { start, reload, fullscreen: fullscreenToggle, sound: on => { soundOn = on; } };
+
+    function animate() {
+      if (disposed) return; frame = requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), .05);
+      if (state === 'playing') {
+        elapsed += dt; data.time = elapsed;
+        if (data.reloading && elapsed >= reloadUntil) { data.ammo = 30; data.reloading = false; beep(450, .1, 'triangle'); publish(); }
+        if (mouseDown) shoot(elapsed);
+        const forward = Number(keys.has('KeyW') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown'));
+        const strafe = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft'));
+        const length = Math.hypot(forward, strafe) || 1; const speed = (keys.has('ShiftLeft') ? 8 : 5.2) * dt / length;
+        const dx = (strafe * Math.cos(yaw) - forward * Math.sin(yaw)) * speed; const dz = (-forward * Math.cos(yaw) - strafe * Math.sin(yaw)) * speed;
+        if (!collides(camera.position.x + dx, camera.position.z)) camera.position.x += dx;
+        if (!collides(camera.position.x, camera.position.z + dz)) camera.position.z += dz;
+        recoil = Math.max(0, recoil - dt * 6); muzzle.intensity = Math.max(0, muzzle.intensity - dt * 65);
+        weapon.position.y = -.42 - recoil * .08 + (forward || strafe ? Math.sin(elapsed * 10) * .008 : 0); weapon.position.z = -.83 + recoil * .12;
+        bots.forEach((bot, i) => {
+          if (bot.dead) {
+            if (elapsed >= bot.cooldown) { const spots = [[-20,-20], [20,-18], [-20,10], [20,10], [0,-22], [-10,-20]]; const p = spots[i]; bot.group.position.set(p[0],0,p[1]); bot.health = 100; bot.dead = false; bot.group.visible = true; bot.cooldown = 2; }
+            return;
+          }
+          direction.set(camera.position.x - bot.group.position.x, 0, camera.position.z - bot.group.position.z); const dist = direction.length(); direction.normalize();
+          bot.group.rotation.y = Math.atan2(direction.x, direction.z);
+          if (dist > 9) {
+            const nx = bot.group.position.x + direction.x * bot.speed * dt; const nz = bot.group.position.z + direction.z * bot.speed * dt;
+            if (!collides(nx, bot.group.position.z, .6)) bot.group.position.x = nx;
+            if (!collides(bot.group.position.x, nz, .6)) bot.group.position.z = nz;
+          } else { bot.group.position.x += Math.cos(elapsed + bot.phase) * dt * .3; }
+          bot.cooldown -= dt;
+          if (dist < 22 && bot.cooldown <= 0) {
+            bot.cooldown = 2.3 + Math.random() * 1.6;
+            const from = bot.group.position.clone().add(new THREE.Vector3(0,1.5,0)); const to = camera.position.clone().sub(from); const distance = to.length();
+            raycaster.set(from, to.normalize());
+            const blocked = raycaster.intersectObjects(scene.children.filter(o => o instanceof THREE.Mesh), false).some(h => h.distance < distance - .3);
+            if (!blocked) { data.health = Math.max(0, data.health - 8); flashHurt(); beep(90, .15, 'sawtooth', .025); publish(); }
+            if (data.health <= 0) { state = 'gameover'; setStatus('gameover'); mouseDown = false; if (document.pointerLockElement) document.exitPointerLock(); publish(); }
+          }
+        });
+        if (elapsed - lastUi > .2) { lastUi = elapsed; publish(); }
+      } else if (state === 'ready') { camera.rotation.y = Math.sin(performance.now() * .00015) * .06; }
+      renderer.render(scene, camera);
+    }
+    animate();
+    return () => {
+      disposed = true; cancelAnimationFrame(frame); gameRef.current = null;
+      document.removeEventListener('pointerlockchange', onLockChange); document.removeEventListener('mousemove', onMouseMove); document.removeEventListener('mousedown', onDown); document.removeEventListener('mouseup', onUp);
+      window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('blur', onBlur); window.removeEventListener('resize', onResize); document.removeEventListener('fullscreenchange', onFullscreen);
+      if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
+      scene.traverse(o => { if (o instanceof THREE.Mesh) { o.geometry.dispose(); const materials = Array.isArray(o.material) ? o.material : [o.material]; materials.forEach(m => m.dispose()); } });
+      renderer.dispose(); renderer.domElement.remove(); if (audio) void audio.close();
+      if (hitTimer.current) clearTimeout(hitTimer.current); if (hurtTimer.current) clearTimeout(hurtTimer.current);
+    };
+  }, [flashHit, flashHurt]);
+
+  useEffect(() => { if ('serviceWorker' in navigator && process.env.NODE_ENV === 'production') void navigator.serviceWorker.register('/sw.js'); }, []);
+  const accuracy = stats.shots ? Math.round(stats.hits / stats.shots * 100) : 0;
+  return <main className="app-shell">
+    <div className="game-canvas" ref={mountRef} />
+    <div className="vignette" />
+    <div className={`damage ${hurt ? 'show' : ''}`} />
+    <header className="topbar">
+      <div className="brand"><div className="brand-mark"><Crosshair size={21}/></div><div><div className="brand-name">AIM<span>FORGE</span><i>®</i></div><div className="brand-sub">TACTICAL TRAINING SYSTEM</div></div></div>
+      <div className="top-center"><span className="status-dot"/> HỆ THỐNG TRỰC TUYẾN <span className="top-divider"/> CHẾ ĐỘ NGOẠI TUYẾN</div>
+      <div className="top-actions"><button title={muted ? 'Bật âm thanh' : 'Tắt âm thanh'} onClick={() => { setMuted(!muted); gameRef.current?.sound(muted); }}>{muted ? <VolumeX size={17}/> : <Volume2 size={17}/>}</button><button title={fullscreen ? 'Thoát toàn màn hình' : 'Toàn màn hình'} onClick={() => gameRef.current?.fullscreen()}><Expand size={17}/></button><div className="profile"><span>01</span><div><b>ĐẶC VỤ</b><small>NGƯỜI CHƠI</small></div></div></div>
+    </header>
+
+    <div className="side-label left-label"><span>AF / TRAINING GROUNDS</span><i/> <span>SECTOR 07</span></div>
+    <div className="side-label right-label"><span>SIMULATION ENVIRONMENT</span><i/> <span>V.01</span></div>
+
+    {status === 'playing' && <>
+      <div className="play-top"><div><span className="live-dot"/> ĐANG HUẤN LUYỆN <small> / ĐẤU VỚI BOT</small></div><strong>{formatTime(stats.time)}</strong></div>
+      <div className={`crosshair ${hit ? 'hit' : ''}`}><span/><span/><span/><span/><i/></div>
+      <div className="playing-hud"><div className="hud-health"><div className="hud-label"><Shield size={14}/> SINH LỰC</div><div className="hud-value">{stats.health}<small> / 100</small></div><div className="health-track"><i style={{width: `${stats.health}%`}}/></div></div><div className="hud-score"><div><Target size={14}/> HẠ GỤC <strong>{String(stats.kills).padStart(2,'0')}</strong></div><div><Gauge size={14}/> CHÍNH XÁC <strong>{accuracy}%</strong></div></div><div className="hud-ammo"><div className="hud-label">AEGIS-IX <span> / ĐẠN DƯỢC</span></div><div className="hud-value">{String(stats.ammo).padStart(2,'0')}<small> / ∞</small></div><div className="ammo-caption">{stats.reloading ? 'ĐANG NẠP ĐẠN...' : '[ R ] NẠP ĐẠN'}</div></div></div>
+    </>}
+
+    {status !== 'playing' && <div className="overlay">
+      <div className="intro">
+        <div className="eyebrow"><span className="eyebrow-line"/> PHÒNG HUẤN LUYỆN CHIẾN THUẬT <span className="eyebrow-number"> / 01</span></div>
+        <h1>{status === 'gameover' ? <>NHIỆM VỤ<br/><em>KẾT THÚC.</em></> : status === 'paused' ? <>TẠM<br/><em>DỪNG.</em></> : <>SẴN SÀNG<br/><em>CHIẾN ĐẤU.</em></>}</h1>
+        <p>{status === 'gameover' ? `Bạn đã hạ ${stats.kills} bot trong ${formatTime(stats.time)}. Hãy quay lại và phá kỷ lục của mình.` : status === 'paused' ? 'Mô phỏng đang tạm dừng. Tiếp tục khi bạn đã sẵn sàng.' : 'Rèn luyện phản xạ, làm chủ tâm ngắm. Bước vào đấu trường và đối đầu với các mục tiêu AI.'}</p>
+        <div className="mode-card"><div className="mode-icon"><Crosshair size={22}/></div><div className="mode-copy"><small>CHẾ ĐỘ ĐÃ CHỌN</small><b>ĐẤU VỚI BOT</b><span>Góc nhìn thứ nhất · Không giới hạn thời gian</span></div><span className="mode-check">✓</span></div>
+        <div className="actions"><button className="start-button" onClick={() => gameRef.current?.start()} disabled={webglError}><span>{status === 'paused' ? 'TIẾP TỤC' : status === 'gameover' ? 'CHƠI LẠI' : 'BẮT ĐẦU HUẤN LUYỆN'}</span><span className="arrow">↗</span></button><button className="fullscreen-button" onClick={() => gameRef.current?.fullscreen()} title="Bật / tắt toàn màn hình"><Maximize size={18}/></button></div>
+        <div className="offline-note"><span/> CHƠI NGAY · KHÔNG CẦN ĐĂNG NHẬP</div>
+        {notice && <div className="notice">{notice}</div>}{webglError && <div className="notice">Không thể khởi tạo WebGL. Hãy bật tăng tốc phần cứng hoặc thử trình duyệt khác.</div>}
+      </div>
+      <div className="environment-tag"><span className="tag-cross">✳</span><div><small>ĐỊA ĐIỂM HUẤN LUYỆN</small><b>THE PROVING GROUND</b><span>SECTOR 07 — MÔ PHỎNG CHIẾN ĐẤU</span></div></div>
+      <div className="coordinates">35° 41&apos; 22.8&quot; N<br/>139° 41&apos; 30.1&quot; E</div>
+    </div>}
+    <footer className="bottom-bar"><div className="controls"><div><Keyboard size={17}/><span><b>W A S D</b><small>DI CHUYỂN</small></span></div><div><MousePointer2 size={16}/><span><b>CHUỘT</b><small>NGẮM & BẮN</small></span></div><div><span className="key-icon">R</span><span><b>PHÍM R</b><small>NẠP ĐẠN</small></span></div><div><span className="key-icon">ESC</span><span><b>ESC</b><small>TẠM DỪNG</small></span></div></div><div className="bottom-right"><Headphones size={16}/><span>ĐEO TAI NGHE ĐỂ CÓ TRẢI NGHIỆM TỐT NHẤT</span><i/> <b><Zap size={13}/> AIMFORGE ENGINE</b></div></footer>
+    <div className="mobile-warning"><Activity size={20}/><b>CẦN BÀN PHÍM & CHUỘT</b><span>Vui lòng mở trò chơi trên máy tính để trải nghiệm đầy đủ.</span></div>
+  </main>;
+}
