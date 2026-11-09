@@ -31,7 +31,7 @@ function blocked(from, dir, max) {
   });
 }
 function makeBots() { return botSpawns.map(([x,z], id)=>({ id, x, z, health:100, respawn:0, cooldown:1+Math.random()*3, phase:Math.random()*10 })); }
-export function createGameServer({ dataDir = process.env.DATA_DIR || '.data', allowedOrigins = process.env.ALLOWED_ORIGINS || '*' } = {}) {
+export function createGameServer({ dataDir = process.env.DATA_DIR || '.data', allowedOrigins = process.env.ALLOWED_ORIGINS || '*', requestHandler = null, upgradeHandler = null } = {}) {
   const rooms = new Map(); const clients = new Set();
   const file = path.resolve(dataDir, 'online-history.json');
   const allow = origin => allowedOrigins === '*' || (origin && allowedOrigins.split(',').map(x=>x.trim()).includes(origin));
@@ -45,13 +45,17 @@ export function createGameServer({ dataDir = process.env.DATA_DIR || '.data', al
     writes = writes.then(async()=>{ await mkdir(path.dirname(file),{recursive:true}); await writeFile(file+'.tmp',snapshot); await rename(file+'.tmp',file); }).catch(e=>console.error('Không thể lưu lịch sử:', e.message));
   }
   const server = http.createServer(async (req,res) => {
+    const url = new URL(req.url,'http://game.local');
+    if (requestHandler && url.pathname !== '/health' && url.pathname !== '/api/online-scores') {
+      try { await requestHandler(req,res); } catch (error) { console.error('Application request failed:', error); if (!res.headersSent) res.writeHead(500); res.end(); }
+      return;
+    }
     const origin=req.headers.origin;
     if (origin && !allow(origin)) { res.writeHead(403); return res.end('Origin not allowed'); }
     res.setHeader('Access-Control-Allow-Origin', allowedOrigins === '*' ? '*' : (origin || allowedOrigins.split(',')[0].trim()));
     res.setHeader('Vary','Origin'); res.setHeader('Cache-Control','no-store');
     if (req.method==='OPTIONS') { res.writeHead(204,{'Access-Control-Allow-Methods':'GET, OPTIONS'}); return res.end(); }
     if (req.method!=='GET') { res.writeHead(405); return res.end(); }
-    const url = new URL(req.url,'http://game.local');
     if (url.pathname==='/') { res.writeHead(200,{'Content-Type':'application/json'}); return res.end(JSON.stringify({service:'AimForge co-op', websocket:'/multiplayer', health:'/health', scores:'/api/online-scores'})); }
     if (url.pathname==='/health') { res.writeHead(200,{'Content-Type':'application/json'}); return res.end(JSON.stringify({ok:true, rooms:rooms.size})); }
     if (url.pathname==='/api/online-scores') {
@@ -65,11 +69,16 @@ export function createGameServer({ dataDir = process.env.DATA_DIR || '.data', al
   });
   const wss = new WebSocketServer({ noServer:true, maxPayload:2048 });
   server.on('upgrade',(req,socket,head)=>{
-    if (new URL(req.url,'http://game.local').pathname!=='/multiplayer' || !allow(req.headers.origin) || clients.size>=200) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
+    if (new URL(req.url,'http://game.local').pathname!=='/multiplayer') {
+      if (upgradeHandler) { Promise.resolve(upgradeHandler(req,socket,head)).catch(() => socket.destroy()); }
+      else socket.destroy();
+      return;
+    }
+    if (!allow(req.headers.origin) || clients.size>=200) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
     wss.handleUpgrade(req,socket,head,ws=>wss.emit('connection',ws,req));
   });
   wss.on('connection', ws=>{
-    clients.add(ws); let player=null; let messages=0; let windowStart=Date.now(); ws.alive=true;
+    clients.add(ws); send(ws,{type:'hello',protocol:1}); let player=null; let messages=0; let windowStart=Date.now(); ws.alive=true;
     ws.on('pong',()=>{ws.alive=true;});
     ws.on('message', raw=>{
       const now=Date.now(); if (now-windowStart>1000) { messages=0; windowStart=now; } if (++messages>40) return ws.close(1008,'Rate limit');

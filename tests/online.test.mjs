@@ -78,3 +78,26 @@ test('history survives a restart and CORS rejects unapproved origins', async () 
     assert.equal(scores.length,1); assert.equal(scores[0].result,'left');
   } finally { await new Promise(resolve=>app.server.close(resolve)); await rm(dataDir,{recursive:true,force:true}); }
 });
+
+test('frontend and multiplayer can share one HTTP origin', async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'aimforge-origin-'));
+  let upgraded = false;
+  const app = createGameServer({
+    dataDir,
+    requestHandler: (req,res) => { res.writeHead(200, {'Content-Type':'text/plain'}); res.end(`frontend:${req.url}`); },
+    upgradeHandler: (_req,socket) => { upgraded = true; socket.destroy(); },
+  });
+  try {
+    await app.ready; await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+    const port = app.server.address().port;
+    assert.equal(await (await fetch(`http://127.0.0.1:${port}/`)).text(), 'frontend:/');
+    assert.equal((await (await fetch(`http://127.0.0.1:${port}/health`)).json()).ok, true);
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/multiplayer`);
+    const hello = new Promise(resolve => socket.once('message', data => resolve(JSON.parse(data.toString()))));
+    assert.deepEqual(await hello, {type:'hello',protocol:1});
+    socket.close(); await once(socket,'close');
+    const other = new WebSocket(`ws://127.0.0.1:${port}/_next/webpack-hmr`);
+    await new Promise(resolve => { other.on('error',()=>{}); other.on('close',resolve); });
+    assert.equal(upgraded,true);
+  } finally { await new Promise(resolve=>app.server.close(resolve)); await rm(dataDir,{recursive:true,force:true}); }
+});

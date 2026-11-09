@@ -54,10 +54,16 @@ export default function Game() {
     const socket = new WebSocket(config.url);
     const session: OnlineSession = { socket, config, id: '', joined: false, queue: [] };
     await new Promise<void>((resolve, reject) => {
-      const timeout = window.setTimeout(() => { socket.close(); reject(new Error('Kết nối hết thời gian. Kiểm tra địa chỉ máy chủ.')); }, 8000);
-      socket.onopen = () => { window.clearTimeout(timeout); resolve(); };
-      socket.onerror = () => { window.clearTimeout(timeout); reject(new Error('Không thể kết nối máy chủ. Kiểm tra WSS và trạng thái máy chủ.')); };
-      socket.onclose = () => { window.clearTimeout(timeout); reject(new Error('Máy chủ đã đóng kết nối.')); };
+      const timeout = window.setTimeout(() => { socket.close(); reject(new Error('Máy chủ không phản hồi đúng giao thức. Kiểm tra địa chỉ và phiên bản server.')); }, 8000);
+      socket.onmessage = event => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type !== 'hello' || message.protocol !== 1) return;
+          window.clearTimeout(timeout); resolve();
+        } catch { /* Wait for a valid handshake. */ }
+      };
+      socket.onerror = () => { window.clearTimeout(timeout); socket.close(); reject(new Error('Không kết nối được máy chủ. Kiểm tra địa chỉ, WSS/TLS và server đang chạy.')); };
+      socket.onclose = () => { window.clearTimeout(timeout); reject(new Error('Máy chủ đã đóng kết nối trước khi xác nhận.')); };
     });
     onlineRef.current?.socket.close(); onlineRef.current = session;
     socket.onmessage = event => { try { const message = JSON.parse(event.data) as OnlineMessage; if (session.queue.length < 100) session.queue.push(message); } catch { /* Ignore malformed packets. */ } };
