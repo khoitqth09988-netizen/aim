@@ -2,9 +2,9 @@
   "name": "nextjs-postgresql-template",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node server/app.mjs --dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node server/app.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "build:pages": "node scripts/build-pages.mjs",

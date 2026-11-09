@@ -1,0 +1,12 @@
+# Optional standalone co-op service for the GitHub Pages build.
+services:
+  - type: web
+    name: aimforge-coop
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm run server:online
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22

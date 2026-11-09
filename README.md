@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Mở địa chỉ được in trong terminal bằng trình duyệt trên máy tính có hỗ trợ WebGL. Để dùng bản production: `npm run build` rồi `npm start`. Trong bản production, sau lần tải đầu tiên khi có mạng, trình duyệt lưu game để có thể mở lại ngoại tuyến tại cùng địa chỉ (không hỗ trợ trong chế độ phát triển). Hãy giữ dữ liệu trang trong trình duyệt.
+Mở địa chỉ được in trong terminal bằng trình duyệt trên máy tính có hỗ trợ WebGL. `npm run dev` chạy cả game và máy chủ co-op trên cùng một cổng; chọn **PHÒNG ONLINE** và dùng địa chỉ đã điền sẵn. Để dùng bản production: `npm run build` rồi `npm start` (cũng chạy cả hai). Trong bản production, sau lần tải đầu tiên khi có mạng, trình duyệt lưu game để có thể mở lại ngoại tuyến tại cùng địa chỉ (không hỗ trợ trong chế độ phát triển). Hãy giữ dữ liệu trang trong trình duyệt.
 
 ## Điều khiển
 
@@ -39,7 +39,9 @@ Khi sửa mã nguồn, chạy `npm install` và `npm run build:pages`, rồi com
 
 Co-op là chế độ **hợp tác chống bot**, không phải PvP: tối đa 8 người trong cùng một phòng cùng nhìn thấy nhau và chiến đấu với cùng một nhóm bot. Mỗi người có sinh lực và thành tích riêng. Máy chủ điều khiển bot, đạn, sát thương và lưu kết quả; tên chỉ là biệt danh, không phải tài khoản. Bot không dừng khi nhấn Esc trong trận online.
 
-Chạy máy chủ riêng bằng Node.js 22+:
+Nếu chạy game bằng `npm run dev` hoặc `npm start`, máy chủ co-op đã được chạy cùng game trên cùng cổng, không cần chạy lệnh nào khác. Nút **PHÒNG ONLINE** tự điền địa chỉ của trang. Mỗi người mở cùng địa chỉ game và dùng cùng mã phòng; sau khi kết nối có thể sao chép link mời trong hộp thoại.
+
+Nếu chỉ dùng GitHub Pages cho giao diện thì cần một máy chủ co-op riêng. Chạy máy chủ riêng bằng Node.js 22+:
 
 ```bash
 npm ci
@@ -48,9 +50,11 @@ npm run server:online
 
 Mặc định máy chủ lắng nghe trên cổng `4000` ở mọi interface. Đặt `PORT` để đổi cổng, `DATA_DIR` để đổi thư mục lưu file `online-history.json`, và `ALLOWED_ORIGINS` (danh sách origin phân cách bằng dấu phẩy) để giới hạn các trang có thể kết nối. Mặc định cho phép mọi origin, phù hợp thử nghiệm nhưng nên giới hạn khi triển khai. Dữ liệu lưu bằng file cục bộ, tối đa 500 lượt; hãy sử dụng ổ đĩa bền vững và sao lưu. Không chạy nhiều bản máy chủ cùng ghi một thư mục.
 
-1. Triển khai máy chủ Node trên dịch vụ hỗ trợ **WebSocket và lưu trữ bền vững**. Đặt reverse proxy HTTPS/TLS trước server và chuyển tiếp cả WebSocket upgrade đến `/multiplayer` lẫn các request HTTP tới `/api/online-scores` và `/health`.
-2. Trong game, chọn **PHÒNG ONLINE**, nhập địa chỉ công khai của máy chủ (`wss://...`), biệt danh và mã phòng, rồi kết nối. Người cùng phòng cần nhập cùng máy chủ và mã phòng.
+1. Triển khai máy chủ Node trên dịch vụ hỗ trợ **WebSocket và lưu trữ bền vững**. Có sẵn `render.yaml` để tạo dịch vụ Node trên Render: kết nối repository trong Render, tạo Blueprint từ repository và triển khai. Gói free có thể ngủ và hệ thống file có thể bị xóa khi khởi động lại; dùng ổ đĩa bền vững nếu muốn giữ lịch sử. Không có máy chủ công khai được cấu hình sẵn trong repository. Đặt reverse proxy HTTPS/TLS trước server và chuyển tiếp cả WebSocket upgrade đến `/multiplayer` lẫn các request HTTP tới `/api/online-scores` và `/health`.
+2. Trong game, chọn **PHÒNG ONLINE**, nhập địa chỉ công khai của máy chủ (`https://...` hoặc `wss://...`), biệt danh và mã phòng, rồi kết nối. WebSocket được kiểm tra phiên bản giao thức trước khi thông báo kết nối thành công. Người cùng phòng cần nhập cùng máy chủ và mã phòng.
 3. Sau khi kết nối, nhấn **BẮT ĐẦU HUẤN LUYỆN**. Khi bị hạ hoặc rời phòng, kết quả tự lưu trên máy chủ. Xem tab **CO-OP** trong **THÀNH TÍCH**, chọn xếp hạng hoặc lịch sử gần đây; bộ lọc theo tên chỉ tìm biệt danh và không xác thực danh tính.
+
+Có thể cài sẵn địa chỉ máy chủ cho bản GitHub Pages bằng cách chạy `NEXT_PUBLIC_ONLINE_SERVER=https://dia-chi-server npm run build:pages` sau khi triển khai, rồi commit lại các file tĩnh. Hoặc chỉ cần gửi link mời từ trong game; không đưa thông tin bí mật vào địa chỉ hay link mời.
 
 GitHub Pages chạy qua HTTPS nên trình duyệt chỉ cho kết nối đến máy chủ **WSS có chứng chỉ TLS hợp lệ**; GitHub Pages không thể tự chạy tiến trình Node/WebSocket. Khi phát triển trên HTTP tại máy của mình có thể dùng `ws://` tới máy chủ mà trình duyệt truy cập được. Đừng sử dụng địa chỉ `localhost` nếu người chơi khác đang dùng máy khác. Không nhập mật khẩu hay token vào trường địa chỉ này.
 
@@ -66,4 +70,4 @@ npm run build
 npm run build:pages
 ```
 
-Kiểm thử server mở nhiều kết nối, kiểm tra đồng bộ phòng, bắn bot và lưu điểm. Kiểm thử thủ công với hai trình duyệt/máy khác nhau sau khi triển khai WSS để xác nhận cấu hình mạng, TLS và WebGL.
+Kiểm thử server mở nhiều kết nối, kiểm tra đồng bộ phòng, bắn bot, lưu điểm và chạy cùng origin với giao diện. Kiểm thử thủ công với hai trình duyệt/máy khác nhau sau khi triển khai WSS để xác nhận cấu hình mạng, TLS và WebGL.
